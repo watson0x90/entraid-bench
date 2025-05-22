@@ -139,6 +139,10 @@ function ConvertTo-HTMLReport {
             background-color: #f0f0f0;
             color: #666666;
         }
+        .status-error {
+            background-color: #ffe6e6;
+            color: #cc0000;
+        }
         .evidence-box {
             background-color: #f9f9f9;
             padding: 10px;
@@ -404,7 +408,7 @@ function ConvertTo-HTMLReport {
                 <h2>Control Assessment Results</h2>
 "@
     
-    # Add each control to the HTML
+    # Add each control to the HTML with FULL DETAILS
     for ($i = 0; $i -lt $Results.Count; $i++) {
         $control = $Results[$i]
         $status = $control.Result
@@ -414,6 +418,7 @@ function ConvertTo-HTMLReport {
             "NOT COMPLIANT" { "status-non-compliant"; $dataStatus = "non-compliant" }
             "INFORMATION NEEDED" { "status-information-needed"; $dataStatus = "information-needed" }
             "NOT APPLICABLE" { "status-not-applicable"; $dataStatus = "information-needed" }
+            "ERROR" { "status-error"; $dataStatus = "non-compliant" }
             default { "status-non-compliant"; $dataStatus = "non-compliant" }
         }
         
@@ -451,12 +456,22 @@ function ConvertTo-HTMLReport {
                                 </tr>
 "@
             
-            foreach ($account in $control.AffectedAccounts) {
+            # Limit to first 20 accounts for display performance
+            $displayAccounts = $control.AffectedAccounts | Select-Object -First 20
+            foreach ($account in $displayAccounts) {
                 $html += @"
                                 <tr>
                                     <td>$($account.Name)</td>
                                     <td>$($account.Id)</td>
                                     <td>$($account.Details)</td>
+                                </tr>
+"@
+            }
+            
+            if ($control.AffectedAccounts.Count -gt 20) {
+                $html += @"
+                                <tr>
+                                    <td colspan="3"><em>... and $($control.AffectedAccounts.Count - 20) more accounts (see CSV file for complete list)</em></td>
                                 </tr>
 "@
             }
@@ -468,7 +483,7 @@ function ConvertTo-HTMLReport {
         }
         
         # Add remediation steps for non-compliant controls
-        if (($status -eq "NOT COMPLIANT" -or $status -eq "PARTIALLY COMPLIANT") -and $control.RemediationSteps) {
+        if (($status -eq "NOT COMPLIANT" -or $status -eq "PARTIALLY COMPLIANT" -or $status -eq "INFORMATION NEEDED") -and $control.RemediationSteps) {
             $html += @"
                         <div class="remediation-steps">
                             <h4>Remediation Steps:</h4>
