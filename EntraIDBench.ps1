@@ -5,20 +5,6 @@
 .DESCRIPTION
     Performs detailed security assessment of Microsoft Entra ID configuration
     against industry best practices and compliance frameworks.
-.PARAMETER ControlCategories
-    Specific categories to assess (identity, access, governance, protection, applications)
-.PARAMETER ExportFormat
-    Output format for the report (HTML, JSON, CSV)
-.PARAMETER SkipLicenseCheck
-    Skip the P2 license check (some controls will show as INFORMATION NEEDED)
-.PARAMETER OutputPath
-    Path where reports and evidence will be saved
-.EXAMPLE
-    .\EntraIDBench.ps1
-    Runs full assessment with default settings
-.EXAMPLE
-    .\EntraIDBench.ps1 -ControlCategories identity,access -ExportFormat HTML
-    Runs only identity and access controls with HTML output
 #>
 [CmdletBinding()]
 param(
@@ -35,30 +21,82 @@ param(
 
 #region Initialize Environment
 $ErrorActionPreference = 'Stop'
-$VerbosePreference = 'Continue'
 
 # Create output directory
 if (-not (Test-Path $OutputPath)) {
     New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
 }
 
-# Import modules
+# Import modules quietly
 $modulePath = Join-Path $PSScriptRoot "modules"
+$savedVerbosePreference = $VerbosePreference
+$VerbosePreference = 'SilentlyContinue'
+$savedWarningPreference = $WarningPreference
+$WarningPreference = 'SilentlyContinue'
+
 Import-Module (Join-Path $modulePath "Common.psm1") -Force
 Import-Module (Join-Path $modulePath "Authentication.psm1") -Force
 Import-Module (Join-Path $modulePath "Evidence.psm1") -Force
 Import-Module (Join-Path $modulePath "Reporting.psm1") -Force
 
+# Restore preferences
+$WarningPreference = $savedWarningPreference
+if ($PSBoundParameters.ContainsKey('Verbose')) {
+    $VerbosePreference = 'Continue'
+} else {
+    $VerbosePreference = $savedVerbosePreference
+}
+
 # Show banner
 Show-EntraIDBanner
 
 # Initialize logging
-Start-Transcript -Path (Join-Path $OutputPath "Assessment_Log.txt")
+$logPath = Join-Path $OutputPath "Assessment_Log.txt"
+Start-Transcript -Path $logPath -Force
 #endregion
 
 #region Authentication and License Check
 try {
     Write-Host "`n[*] Authenticating to Microsoft Graph..." -ForegroundColor Cyan
+    
+    # First ensure Microsoft.Graph module is installed
+    Write-Host "[*] Checking Microsoft Graph PowerShell module..." -ForegroundColor Cyan
+    $graphModule = Get-Module -ListAvailable -Name Microsoft.Graph
+    if (-not $graphModule) {
+        Write-Host "[!] Microsoft Graph PowerShell module not found. Installing..." -ForegroundColor Yellow
+        try {
+            Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber
+            Write-Host "[+] Microsoft Graph module installed successfully" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "[!] Failed to install Microsoft Graph module: $_" -ForegroundColor Red
+            Write-Host "[!] Please install manually: Install-Module Microsoft.Graph -Scope CurrentUser" -ForegroundColor Red
+            Stop-Transcript
+            exit 1
+        }
+    }
+    
+    # Import required Graph modules
+    Write-Host "[*] Importing Microsoft Graph modules..." -ForegroundColor Cyan
+    $requiredModules = @(
+        'Microsoft.Graph.Authentication',
+        'Microsoft.Graph.Identity.DirectoryManagement',
+        'Microsoft.Graph.Identity.SignIns',
+        'Microsoft.Graph.Users',
+        'Microsoft.Graph.Groups',
+        'Microsoft.Graph.Applications'
+    )
+    
+    foreach ($module in $requiredModules) {
+        try {
+            Import-Module $module -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Host "[!] Warning: Could not import $module" -ForegroundColor Yellow
+        }
+    }
+    
+    # Attempt authentication
     $authResult = Connect-EntraIDGraph
     
     if (-not $authResult.Success) {
@@ -67,7 +105,27 @@ try {
     
     Write-Host "[+] Successfully authenticated as: $($authResult.Account)" -ForegroundColor Green
     
+    # Verify connection by making a test call
+    Write-Host "[*] Verifying connection..." -ForegroundColor Cyan
+    try {
+        $testOrg = Get-MgOrganization -ErrorAction Stop
+        Write-Host "[+] Connection verified successfully" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[!] Connection verification failed: $_" -ForegroundColor Red
+        Write-Host "[!] Attempting to reconnect..." -ForegroundColor Yellow
+        
+        # Try disconnecting and reconnecting
+        Disconnect-MgGraph -ErrorAction SilentlyContinue
+        $authResult = Connect-EntraIDGraph
+        
+        if (-not $authResult.Success) {
+            throw "Failed to re-authenticate after connection test failure"
+        }
+    }
+    
     # Get tenant information
+    Write-Host "[*] Getting tenant information..." -ForegroundColor Cyan
     $tenantInfo = Get-TenantInformation
     Write-Host "[*] Assessing tenant: $($tenantInfo.DisplayName) ($($tenantInfo.TenantId))" -ForegroundColor Cyan
     
@@ -81,6 +139,7 @@ try {
             Write-Host "[+] Entra ID P2 license detected" -ForegroundColor Green
         } else {
             Write-Host "[!] No Entra ID P2 license detected. Some controls will show limited results." -ForegroundColor Yellow
+            Write-Host "[!] Consider using -SkipLicenseCheck to bypass this check if you know P2 features are available." -ForegroundColor Yellow
         }
     }
     
@@ -98,7 +157,15 @@ try {
     }
 }
 catch {
-    Write-Host "[!] Initialization failed: $_" -ForegroundColor Red
+    Write-Host "`n[!] CRITICAL: Authentication failed!" -ForegroundColor Red
+    Write-Host "[!] Error: $_" -ForegroundColor Red
+    Write-Host "`n[*] Troubleshooting steps:" -ForegroundColor Yellow
+    Write-Host "    1. Ensure you have the Microsoft Graph PowerShell module installed" -ForegroundColor Yellow
+    Write-Host "    2. Try running: Connect-MgGraph -Scopes 'User.Read.All','Directory.Read.All'" -ForegroundColor Yellow
+    Write-Host "    3. Ensure your account has appropriate permissions in Entra ID" -ForegroundColor Yellow
+    Write-Host "    4. Check if MFA or Conditional Access policies are blocking the sign-in" -ForegroundColor Yellow
+    Write-Host "    5. Try clearing cached credentials: Disconnect-MgGraph" -ForegroundColor Yellow
+    
     Stop-Transcript
     exit 1
 }
@@ -110,6 +177,7 @@ Write-Host "[*] Categories to assess: $($assessmentContext.Categories -join ', '
 
 $allResults = @()
 $categoryResults = @{}
+$totalErrors = 0
 
 foreach ($category in $assessmentContext.Categories) {
     Write-Host "`n[*] Assessing '$category' controls..." -ForegroundColor Cyan
@@ -130,6 +198,7 @@ foreach ($category in $assessmentContext.Categories) {
     
     $categoryResults[$category] = @()
     $controlNumber = 0
+    $categoryErrors = 0
     
     foreach ($script in $controlScripts) {
         $controlNumber++
@@ -149,38 +218,58 @@ foreach ($category in $assessmentContext.Categories) {
             # The script should define a function with the same name as the file
             $functionName = $script.BaseName
             if (Get-Command -Name $functionName -ErrorAction SilentlyContinue) {
-                $result = & $functionName
-                
-                # Add metadata
-                $result | Add-Member -NotePropertyName Category -NotePropertyValue $category -Force
-                $result | Add-Member -NotePropertyName ControlId -NotePropertyValue $script.BaseName -Force
-                $result | Add-Member -NotePropertyName AssessmentTime -NotePropertyValue (Get-Date) -Force
-                
-                # Handle evidence
-                if ($result.Evidence -and $result.Evidence.Length -gt 1000) {
-                    $evidencePath = Save-Evidence -Evidence $result.Evidence `
-                                                 -ControlId $script.BaseName `
-                                                 -OutputPath $assessmentContext.OutputPath
-                    $result | Add-Member -NotePropertyName EvidenceFile -NotePropertyValue $evidencePath -Force
+                # Execute with error handling
+                $result = $null
+                try {
+                    $result = & $functionName
+                }
+                catch {
+                    # Create error result for control execution failure
+                    $result = [PSCustomObject]@{
+                        Control = $script.BaseName
+                        ControlDescription = "Error executing control"
+                        Finding = "Control execution failed: $($_.Exception.Message)"
+                        Result = "ERROR"
+                        Evidence = "Error: $_`nStack: $($_.ScriptStackTrace)"
+                        RemediationSteps = "Review the error and ensure proper permissions are granted."
+                        AffectedAccounts = @()
+                    }
+                    $categoryErrors++
+                    $totalErrors++
                 }
                 
-                # Handle affected accounts
-                if ($result.AffectedAccounts -and $result.AffectedAccounts.Count -gt 0) {
-                    $accountsPath = Save-AffectedAccounts -Accounts $result.AffectedAccounts `
-                                                         -ControlId $script.BaseName `
-                                                         -OutputPath $assessmentContext.OutputPath
-                    $result | Add-Member -NotePropertyName AffectedAccountsFile -NotePropertyValue $accountsPath -Force
-                }
-                
-                $categoryResults[$category] += $result
-                $allResults += $result
-                
-                # Display result
-                $statusColor = Get-StatusColor -Status $result.Result
-                Write-Host " [$($result.Result)]" -ForegroundColor $statusColor
-                
-                if ($result.Finding) {
-                    Write-Host "     Finding: $($result.Finding)" -ForegroundColor Gray
+                if ($result) {
+                    # Add metadata
+                    $result | Add-Member -NotePropertyName Category -NotePropertyValue $category -Force
+                    $result | Add-Member -NotePropertyName ControlId -NotePropertyValue $script.BaseName -Force
+                    $result | Add-Member -NotePropertyName AssessmentTime -NotePropertyValue (Get-Date) -Force
+                    
+                    # Handle evidence
+                    if ($result.Evidence -and $result.Evidence.Length -gt 1000) {
+                        $evidencePath = Save-Evidence -Evidence $result.Evidence `
+                                                     -ControlId $script.BaseName `
+                                                     -OutputPath $assessmentContext.OutputPath
+                        $result | Add-Member -NotePropertyName EvidenceFile -NotePropertyValue $evidencePath -Force
+                    }
+                    
+                    # Handle affected accounts
+                    if ($result.AffectedAccounts -and $result.AffectedAccounts.Count -gt 0) {
+                        $accountsPath = Save-AffectedAccounts -Accounts $result.AffectedAccounts `
+                                                             -ControlId $script.BaseName `
+                                                             -OutputPath $assessmentContext.OutputPath
+                        $result | Add-Member -NotePropertyName AffectedAccountsFile -NotePropertyValue $accountsPath -Force
+                    }
+                    
+                    $categoryResults[$category] += $result
+                    $allResults += $result
+                    
+                    # Display result
+                    $statusColor = Get-StatusColor -Status $result.Result
+                    Write-Host " [$($result.Result)]" -ForegroundColor $statusColor
+                    
+                    if ($result.Finding -and $result.Result -ne "COMPLIANT") {
+                        Write-Host "     Finding: $($result.Finding)" -ForegroundColor Gray
+                    }
                 }
             }
             else {
@@ -190,14 +279,18 @@ foreach ($category in $assessmentContext.Categories) {
         catch {
             Write-Host " [ERROR]" -ForegroundColor Red
             Write-Host "     Error: $_" -ForegroundColor Red
+            $categoryErrors++
+            $totalErrors++
             
             # Create error result
             $errorResult = [PSCustomObject]@{
                 Control = $script.BaseName
-                ControlDescription = "Error executing control"
-                Finding = "An error occurred during assessment"
+                ControlDescription = "Error loading control"
+                Finding = "Control could not be loaded or executed"
                 Result = "ERROR"
                 Evidence = "Error details: $_`nStack trace: $($_.ScriptStackTrace)"
+                RemediationSteps = "Check the control script for syntax errors."
+                AffectedAccounts = @()
                 Category = $category
                 ControlId = $script.BaseName
                 AssessmentTime = Get-Date
@@ -209,6 +302,16 @@ foreach ($category in $assessmentContext.Categories) {
     }
     
     Write-Progress -Activity "Assessing $category controls" -Completed
+    
+    if ($categoryErrors -gt 0) {
+        Write-Host "  [!] Category completed with $categoryErrors errors" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [+] Category completed successfully" -ForegroundColor Green
+    }
+}
+
+if ($totalErrors -gt 0) {
+    Write-Host "`n[!] Assessment completed with $totalErrors total errors" -ForegroundColor Yellow
 }
 #endregion
 

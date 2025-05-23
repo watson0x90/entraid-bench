@@ -3,17 +3,18 @@
 function Show-EntraIDBanner {
     Write-Host @"
 
-+===========================================================================+
-|                                                                           |
-|   EEEEEE NN   NN TTTTTT RRRRRR   AAAAA  IIIII DDDDD                      |
-|   E      NNN  NN   TT   R    RR A     A  III  D    DD                    |
-|   EEEE   NN N NN   TT   RRRRRR  AAAAAAA  III  D     DD                   |
-|   E      NN  NNN   TT   R   RR  A     A  III  D    DD                    |
-|   EEEEEE NN   NN   TT   R    RR A     A IIIII DDDDD                      |
-|                                                                           |
-|              Security Benchmark Assessment Tool v2.0                      |
-|                                                                           |
-+===========================================================================+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                                                                           ║
+║   ███████╗███╗   ██╗████████╗██████╗  █████╗ ██╗██████╗                 ║
+║   ██╔════╝████╗  ██║╚══██╔══╝██╔══██╗██╔══██╗██║██╔══██╗                ║
+║   █████╗  ██╔██╗ ██║   ██║   ██████╔╝███████║██║██║  ██║                ║
+║   ██╔══╝  ██║╚██╗██║   ██║   ██╔══██╗██╔══██║██║██║  ██║                ║
+║   ███████╗██║ ╚████║   ██║   ██║  ██║██║  ██║██║██████╔╝                ║
+║   ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═════╝                 ║
+║                                                                           ║
+║              Security Benchmark Assessment Tool v2.0                      ║
+║                                                                           ║
+╚═══════════════════════════════════════════════════════════════════════════╝
 
 "@ -ForegroundColor Cyan
 }
@@ -51,7 +52,7 @@ function Get-TenantInformation {
         }
     }
     catch {
-        throw "Failed to retrieve tenant information: $($_.Exception.Message)"
+        throw "Failed to retrieve tenant information: $_"
     }
 }
 
@@ -90,9 +91,9 @@ function Show-AssessmentSummary {
         [hashtable]$CategoryResults
     )
     
-    Write-Host "`n+===================================================================+" -ForegroundColor Cyan
-    Write-Host "|                     ASSESSMENT SUMMARY                            |" -ForegroundColor Cyan
-    Write-Host "+===================================================================+" -ForegroundColor Cyan
+    Write-Host "`n╔═══════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                     ASSESSMENT SUMMARY                            ║" -ForegroundColor Cyan
+    Write-Host "╚═══════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     
     # Overall statistics
     $total = $Results.Count
@@ -109,7 +110,7 @@ function Show-AssessmentSummary {
     Write-Host "+- Non-Compliant:       $nonCompliant" -ForegroundColor Red
     Write-Host "+- Information Needed:  $infoNeeded" -ForegroundColor Cyan
     Write-Host "+- Not Applicable:      $notApplicable" -ForegroundColor DarkGray
-    Write-Host "+- Errors:              $errors" -ForegroundColor Magenta
+    Write-Host "'- Errors:              $errors" -ForegroundColor Magenta
     
     # Calculate compliance percentage
     $assessableControls = $total - $infoNeeded - $notApplicable - $errors
@@ -157,7 +158,7 @@ function Get-SafeDirectoryRoles {
         return $roles
     }
     catch {
-        Write-Warning "Failed to get directory roles: $($_.Exception.Message)"
+        Write-Warning "Failed to get directory roles: $_"
         return @()
     }
 }
@@ -189,7 +190,7 @@ function Get-SafeUsers {
         }
     }
     catch {
-        Write-Warning "Failed to get users: $($_.Exception.Message)"
+        Write-Warning "Failed to get users: $_"
         # Try without pagination
         try {
             if ($Filter) {
@@ -204,7 +205,7 @@ function Get-SafeUsers {
             return $users
         }
         catch {
-            Write-Warning "Failed to get users even without pagination: $($_.Exception.Message)"
+            Write-Warning "Failed to get users even without pagination: $_"
             return @()
         }
     }
